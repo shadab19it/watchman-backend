@@ -5,7 +5,7 @@ const router = express.Router();
 
 // added website
 router.post(
-  "/website/add",
+  "/add",
   [
     check("url", "Url is not valid").isURL(),
     check("name", "Name must be at least 5 chars long").isLength({ min: 5 }),
