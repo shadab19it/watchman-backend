@@ -1,61 +1,77 @@
 import express, { Request, Response, Application } from "express";
 import bodyParser from "body-parser";
-import mongoose from "mongoose";
 import { websiteMonitor, MonitorRes } from "./websiteMonitor";
 import { Websites } from "./watchConfig";
 import Influx, { InfluxDB } from "influx";
-import os from "os";
-
+import mysql from "mysql";
 const app: Application = express();
+// my Routes
+import website from "./routes/website";
+import monitor from "./routes/monitor";
+
+// middlewere
 app.use(bodyParser());
 app.use(express.json());
-// my data base
-const influx = new Influx.InfluxDB({
+// my mysql database
+export const mysqlDB = mysql.createConnection({
+  host: "localhost",
+  user: "root",
+  password: "kightangle123",
+  insecureAuth: true,
+  database: "watchman",
+});
+
+mysqlDB.connect((err) => {
+  if (err) throw err;
+  console.log("mysql db Connected!");
+  // mysqlDB.query("CREATE DATABASE IF NOT EXISTS watchman", (err, result) => {
+  //   if (err) throw err;
+  //   console.log("maysql Database created");
+  // });
+});
+
+//my Influx database
+export const influx = new Influx.InfluxDB({
   host: "localhost",
   database: "watchman",
   schema: [
     {
-      measurement: "website_watch",
+      measurement: "response_times",
       fields: {
         resTime: Influx.FieldType.INTEGER,
         dns: Influx.FieldType.INTEGER,
         tcp: Influx.FieldType.INTEGER,
         tls: Influx.FieldType.INTEGER,
+        download: Influx.FieldType.INTEGER,
+        tffb: Influx.FieldType.INTEGER,
+        timeNow: Influx.FieldType.INTEGER,
       },
       tags: ["host"],
     },
   ],
 });
 
-// Run websiteMonitor after interval of Time
+//Run websiteMonitor after interval of Time
 Websites.map((w) =>
   setInterval(websiteMonitor, w.interval * 1000, w, (res: MonitorRes) => {
     let resTime = res.response - res.start;
     influx
       .writePoints([
         {
-          timestamp: res.start,
-          measurement: "website_watch",
+          timestamp: new Date(),
+          measurement: "response_times",
           tags: { host: w.name },
           fields: {
+            timeNow: res.start,
             resTime: resTime,
             dns: res.phases.dns,
             tls: res.phases.tls,
             tcp: res.phases.tcp,
+            tffb: res.phases.firstByte,
+            download: res.phases.download,
           },
         },
       ])
-      .then(() => {
-        return influx.query(`
-        select * from website_watch
-        where host = ${Influx.escape.stringLit(w.name)}
-        order by time desc
-        limit 3
-      `);
-      })
-      .then((rows) => {
-        rows.forEach((row) => console.log(`A request to ${JSON.stringify(row)} `));
-      })
       .catch((err) => {
         console.error(`Error saving data to InfluxDB! ${err}`);
       });
@@ -63,11 +79,22 @@ Websites.map((w) =>
   })
 );
 
-influx.getDatabaseNames().then((name) => console.log(name));
+influx
+  .getDatabaseNames()
+  .then((names) => {
+    if (!names.includes("watchman")) {
+      return influx.createDatabase("watchman");
+    } else {
+      console.log("Database Exists");
+    }
+  })
+  .catch((err) => {
+    console.error(`Error creating Influx database!`);
+  });
 
-app.get("/", async (req: Request, res: Response) => {
-  res.send("hello");
-});
+// my routes
+app.use("/api/website", website);
+app.use("/api", monitor);
 
 const PORT: number = 40;
 app.listen(PORT, () => {
